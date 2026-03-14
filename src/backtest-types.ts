@@ -4,6 +4,8 @@ export interface PricePoint {
   t: number;
   /** Price at that time */
   p: number;
+  /** Available liquidity in USDC at this price level (optional, from Telonex bid_size/ask_size) */
+  liquidity?: number;
 }
 
 /** Historical price data for a single token */
@@ -48,6 +50,8 @@ export interface BacktestTrade {
   grossProfitUsdc: number;
   feesUsdc: number;
   netProfitUsdc: number;
+  /** Available liquidity in USDC at the time of the trade (min across all legs) */
+  liquidityUsdc?: number;
 }
 
 /** Configuration for the backtest */
@@ -70,6 +74,12 @@ export interface BacktestConfig {
   fidelity: number;
   /** Max number of events to backtest (0 = all) */
   maxEvents: number;
+  /** Maximum total exposure across all open positions (USDC). 0 = unlimited */
+  maxExposureUsdc: number;
+  /** Daily loss limit — stop trading for the day if losses exceed this (USDC). 0 = unlimited */
+  dailyLossLimitUsdc: number;
+  /** Minimum orderbook liquidity (USDC) to consider a trade. 0 = no filter */
+  minLiquidityUsdc: number;
 }
 
 /** Full backtest results and statistics */
@@ -141,4 +151,10 @@ export interface BacktestStats {
   avgTradesPerDay: number;
   bestDay: { date: string; pnl: number };
   worstDay: { date: string; pnl: number };
+
+  // Risk constraint stats
+  tradesSkippedExposure: number;
+  tradesSkippedDailyLoss: number;
+  tradesSkippedLiquidity: number;
+  dailyLossBreaches: number;
 }

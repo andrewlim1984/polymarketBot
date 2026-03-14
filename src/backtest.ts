@@ -27,6 +27,9 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
  *   BACKTEST_INTERVAL      - Price history interval: 1h, 6h, 1d, 1w, max (default: 1h)
  *   BACKTEST_FIDELITY      - Number of data points per token (default: 500) [clob source only]
  *   BACKTEST_MAX_EVENTS    - Max events to backtest, 0 = all (default: 200)
+ *   BACKTEST_MAX_EXPOSURE   - Max total exposure USDC, 0 = unlimited (default: 500)
+ *   BACKTEST_DAILY_LOSS     - Daily loss limit USDC, 0 = unlimited (default: 100)
+ *   BACKTEST_MIN_LIQUIDITY  - Min orderbook depth USDC, 0 = no filter (default: 100)
  */
 
 async function main(): Promise<void> {
@@ -52,6 +55,9 @@ async function main(): Promise<void> {
     interval: (process.env.BACKTEST_INTERVAL as BacktestConfig["interval"]) || "1h",
     fidelity: parseInt(process.env.BACKTEST_FIDELITY || "500", 10),
     maxEvents: parseInt(process.env.BACKTEST_MAX_EVENTS || "200", 10),
+    maxExposureUsdc: parseFloat(process.env.BACKTEST_MAX_EXPOSURE || process.env.MAX_TOTAL_EXPOSURE_USDC || "500"),
+    dailyLossLimitUsdc: parseFloat(process.env.BACKTEST_DAILY_LOSS || process.env.DAILY_LOSS_LIMIT_USDC || "100"),
+    minLiquidityUsdc: parseFloat(process.env.BACKTEST_MIN_LIQUIDITY || process.env.MIN_LIQUIDITY_USDC || "100"),
   };
 
   logger.info(`Data source: ${source.toUpperCase()}`);
@@ -63,6 +69,9 @@ async function main(): Promise<void> {
     lookback: `${config.lookbackDays} days`,
     interval: config.interval,
     maxEvents: config.maxEvents,
+    maxExposure: config.maxExposureUsdc > 0 ? `$${config.maxExposureUsdc}` : "unlimited",
+    dailyLossLimit: config.dailyLossLimitUsdc > 0 ? `$${config.dailyLossLimitUsdc}` : "unlimited",
+    minLiquidity: config.minLiquidityUsdc > 0 ? `$${config.minLiquidityUsdc}` : "none",
   })}`);
 
   let eventHistories: EventPriceHistory[];
