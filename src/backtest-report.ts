@@ -22,6 +22,9 @@ export class BacktestReport {
       ["Fee Rate", `${(results.config.feeRate * 100).toFixed(2)}%`],
       ["Gas Cost / Tx", `$${results.config.gasCostPerTx}`],
       ["Lookback", `${results.config.lookbackDays} days`],
+      ["Max Exposure", results.config.maxExposureUsdc > 0 ? `$${results.config.maxExposureUsdc}` : "unlimited"],
+      ["Daily Loss Limit", results.config.dailyLossLimitUsdc > 0 ? `$${results.config.dailyLossLimitUsdc}` : "unlimited"],
+      ["Min Liquidity", results.config.minLiquidityUsdc > 0 ? `$${results.config.minLiquidityUsdc}` : "none"],
     ]);
 
     // Overview
@@ -79,6 +82,18 @@ export class BacktestReport {
       ["Best Day", chalk.green(`${stats.bestDay.date}: +$${stats.bestDay.pnl.toFixed(2)}`)],
       ["Worst Day", chalk.red(`${stats.worstDay.date}: $${stats.worstDay.pnl.toFixed(2)}`)],
     ]);
+
+    // Risk Constraints
+    const totalSkipped = stats.tradesSkippedExposure + stats.tradesSkippedDailyLoss + stats.tradesSkippedLiquidity;
+    if (totalSkipped > 0 || stats.dailyLossBreaches > 0) {
+      this.printSection("Risk Constraints", [
+        ["Skipped (Exposure)", stats.tradesSkippedExposure.toString()],
+        ["Skipped (Daily Loss)", stats.tradesSkippedDailyLoss.toString()],
+        ["Skipped (Liquidity)", stats.tradesSkippedLiquidity.toString()],
+        ["Total Skipped", chalk.yellow(totalSkipped.toString())],
+        ["Daily Loss Breaches", stats.dailyLossBreaches.toString()],
+      ]);
+    }
 
     // Print daily returns table (last 30 days)
     if (dailyReturns.length > 0) {
