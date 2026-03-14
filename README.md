@@ -25,6 +25,7 @@ When the combined price is **less than $1.00**, you can buy both sides and guara
 - **Risk Management**: Configurable trade limits, daily loss caps, and kill switch
 - **Scan-Only Mode**: Run without a wallet to just monitor opportunities
 - **Backtesting Engine**: Simulate the strategy on historical data with full statistics (PnL, Sharpe, max drawdown, equity curve)
+- **Telonex Integration**: Use tick-level bid/ask quotes from [Telonex.io](https://telonex.io) for high-fidelity backtesting
 
 ## Quick Start
 
@@ -82,7 +83,11 @@ npm run scan
 Run a historical backtest to simulate returns:
 
 ```bash
-npm run backtest
+# Using Telonex data (recommended - tick-level quotes)
+TELONEX_API_KEY=your_key npm run backtest
+
+# Using Polymarket CLOB API (no API key needed)
+BACKTEST_SOURCE=clob npm run backtest
 ```
 
 Customize backtest parameters via environment variables:
@@ -130,6 +135,8 @@ npm start
 | `DAILY_LOSS_LIMIT_USDC` | `100` | Daily loss limit before kill switch |
 | `MIN_LIQUIDITY_USDC` | `100` | Min orderbook liquidity to trade |
 | `ORDER_TYPE` | `FOK` | `FOK` (Fill-or-Kill) or `GTC` (Good-Til-Cancelled) |
+| `BACKTEST_SOURCE` | `telonex`* | Data source: `telonex` or `clob` (*auto: telonex if API key set) |
+| `TELONEX_API_KEY` | — | Telonex API key (required for telonex source) |
 | `BACKTEST_CAPITAL` | `10000` | Starting capital for backtest (USDC) |
 | `BACKTEST_TRADE_SIZE` | `100` | Trade size per opportunity in backtest |
 | `BACKTEST_MIN_SPREAD` | `0.02` | Min spread threshold for backtest |
@@ -137,7 +144,7 @@ npm start
 | `BACKTEST_GAS_COST` | `0.007` | Gas cost per transaction (USDC) |
 | `BACKTEST_LOOKBACK_DAYS` | `30` | Days of historical data to fetch |
 | `BACKTEST_INTERVAL` | `1h` | Price history interval (1h/6h/1d/1w/max) |
-| `BACKTEST_FIDELITY` | `500` | Number of data points per token |
+| `BACKTEST_FIDELITY` | `500` | Number of data points per token (clob source only) |
 | `BACKTEST_MAX_EVENTS` | `200` | Max events to backtest (0 = all) |
 
 ## Architecture
@@ -148,7 +155,8 @@ src/
 ├── scan-only.ts          # Standalone single-scan mode
 ├── backtest.ts           # Backtest CLI entry point
 ├── backtest-types.ts     # Backtest type definitions
-├── backtest-fetcher.ts   # Historical price data fetcher
+├── backtest-fetcher.ts   # Historical price data fetcher (Polymarket CLOB)
+├── telonex-fetcher.ts    # Historical price data fetcher (Telonex tick-level quotes)
 ├── backtest-engine.ts    # Backtest simulation engine
 ├── backtest-report.ts    # Statistics & report printer
 ├── config.ts             # Configuration loader (.env)
@@ -167,6 +175,7 @@ src/
 | Gamma API | `https://gamma-api.polymarket.com` | No |
 | CLOB API | `https://clob.polymarket.com` | Yes (for trading) |
 | WebSocket | `wss://ws-subscriptions-clob.polymarket.com/ws/` | No |
+| Telonex API | `https://api.telonex.io/v1` | Yes (API key for downloads) |
 
 ## Risk Disclaimer
 

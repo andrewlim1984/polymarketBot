@@ -1,10 +1,12 @@
 import { Logger } from "./logger";
-import { BacktestConfig } from "./backtest-types";
+import { BacktestConfig, EventPriceHistory } from "./backtest-types";
 import { BacktestFetcher } from "./backtest-fetcher";
+import { TelonexFetcher } from "./telonex-fetcher";
 import { BacktestEngine } from "./backtest-engine";
 import { BacktestReport } from "./backtest-report";
 import dotenv from "dotenv";
 import path from "path";
+import fs from "fs";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
@@ -14,6 +16,8 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
  * Usage: npm run backtest
  *
  * Environment variables (optional):
+ *   BACKTEST_SOURCE        - Data source: "telonex" or "clob" (default: telonex if API key set, else clob)
+ *   TELONEX_API_KEY        - Telonex API key (required for telonex source)
  *   BACKTEST_CAPITAL       - Starting capital in USDC (default: 10000)
  *   BACKTEST_TRADE_SIZE    - Trade size per opportunity (default: 100)
  *   BACKTEST_MIN_SPREAD    - Min spread threshold, e.g. 0.02 = 2% (default: 0.02)
@@ -21,7 +25,7 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
  *   BACKTEST_GAS_COST      - Gas cost per tx in USDC (default: 0.007)
  *   BACKTEST_LOOKBACK_DAYS - Number of days of history (default: 30)
  *   BACKTEST_INTERVAL      - Price history interval: 1h, 6h, 1d, 1w, max (default: 1h)
- *   BACKTEST_FIDELITY      - Number of data points per token (default: 500)
+ *   BACKTEST_FIDELITY      - Number of data points per token (default: 500) [clob source only]
  *   BACKTEST_MAX_EVENTS    - Max events to backtest, 0 = all (default: 200)
  */
 
@@ -35,6 +39,9 @@ async function main(): Promise<void> {
     "╚══════════════════════════════════════════════════════════════╝\n"
   );
 
+  const telonexApiKey = process.env.TELONEX_API_KEY || "";
+  const source = process.env.BACKTEST_SOURCE || (telonexApiKey ? "telonex" : "clob");
+
   const config: BacktestConfig = {
     startingCapital: parseFloat(process.env.BACKTEST_CAPITAL || "10000"),
     tradeSizeUsdc: parseFloat(process.env.BACKTEST_TRADE_SIZE || "100"),
@@ -47,6 +54,7 @@ async function main(): Promise<void> {
     maxEvents: parseInt(process.env.BACKTEST_MAX_EVENTS || "200", 10),
   };
 
+  logger.info(`Data source: ${source.toUpperCase()}`);
   logger.info(`Backtest config: ${JSON.stringify({
     capital: `$${config.startingCapital}`,
     tradeSize: `$${config.tradeSizeUsdc}`,
@@ -57,34 +65,13 @@ async function main(): Promise<void> {
     maxEvents: config.maxEvents,
   })}`);
 
-  // Phase 1: Fetch data
-  logger.info("Phase 1: Fetching historical price data...");
-  const fetcher = new BacktestFetcher(config, logger);
-  const events = await fetcher.fetchEvents();
+  let eventHistories: EventPriceHistory[];
 
-  logger.info(`Fetching price histories for ${events.length} events (this may take a few minutes)...`);
-
-  const eventHistories = [];
-  let fetchedCount = 0;
-  let skippedCount = 0;
-
-  for (const event of events) {
-    const history = await fetcher.fetchEventPriceHistory(event);
-    if (history) {
-      eventHistories.push(history);
-      fetchedCount++;
-    } else {
-      skippedCount++;
-    }
-
-    // Progress update every 50 events
-    const total = fetchedCount + skippedCount;
-    if (total % 50 === 0) {
-      logger.info(`  Progress: ${total}/${events.length} events processed (${fetchedCount} with data, ${skippedCount} skipped)`);
-    }
+  if (source === "telonex") {
+    eventHistories = await fetchFromTelonex(config, telonexApiKey, logger);
+  } else {
+    eventHistories = await fetchFromClob(config, logger);
   }
-
-  logger.info(`Phase 1 complete: ${fetchedCount} events with price history, ${skippedCount} skipped.`);
 
   if (eventHistories.length === 0) {
     logger.error("No historical price data found. Try increasing BACKTEST_MAX_EVENTS or BACKTEST_LOOKBACK_DAYS.");
@@ -102,7 +89,6 @@ async function main(): Promise<void> {
 
   // Export results to JSON
   const outputPath = path.resolve(process.cwd(), "backtest-results.json");
-  const fs = await import("fs");
   fs.writeFileSync(
     outputPath,
     JSON.stringify(
@@ -127,6 +113,90 @@ async function main(): Promise<void> {
     )
   );
   logger.success(`Results exported to ${outputPath}`);
+}
+
+/**
+ * Fetch historical data from Telonex API (tick-level quotes).
+ */
+async function fetchFromTelonex(
+  config: BacktestConfig,
+  apiKey: string,
+  logger: Logger
+): Promise<EventPriceHistory[]> {
+  if (!apiKey) {
+    logger.error("TELONEX_API_KEY is required for Telonex data source. Set it in .env or environment.");
+    process.exit(1);
+  }
+
+  logger.info("Phase 1: Fetching historical data from Telonex...");
+  const fetcher = new TelonexFetcher(config, apiKey, logger);
+
+  // Step 1: Get market metadata
+  const eventGroups = await fetcher.fetchMarketMetadata();
+  logger.info(`Found ${eventGroups.length} events to backtest.`);
+
+  // Step 2: Download quotes for each event
+  logger.info(`Downloading quotes for ${eventGroups.length} events (this may take a while)...`);
+  const eventHistories: EventPriceHistory[] = [];
+  let fetchedCount = 0;
+  let skippedCount = 0;
+
+  for (const eventGroup of eventGroups) {
+    const history = await fetcher.fetchEventPriceHistory(eventGroup);
+    if (history) {
+      eventHistories.push(history);
+      fetchedCount++;
+    } else {
+      skippedCount++;
+    }
+
+    const total = fetchedCount + skippedCount;
+    if (total % 25 === 0) {
+      logger.info(`  Progress: ${total}/${eventGroups.length} events (${fetchedCount} with data, ${skippedCount} skipped)`);
+    }
+  }
+
+  logger.info(`Phase 1 complete: ${fetchedCount} events with Telonex data, ${skippedCount} skipped.`);
+
+  // Cleanup temp files (keep metadata cache)
+  fetcher.cleanup();
+
+  return eventHistories;
+}
+
+/**
+ * Fetch historical data from Polymarket's CLOB API (prices-history endpoint).
+ */
+async function fetchFromClob(
+  config: BacktestConfig,
+  logger: Logger
+): Promise<EventPriceHistory[]> {
+  logger.info("Phase 1: Fetching historical data from Polymarket CLOB API...");
+  const fetcher = new BacktestFetcher(config, logger);
+  const events = await fetcher.fetchEvents();
+
+  logger.info(`Fetching price histories for ${events.length} events (this may take a few minutes)...`);
+  const eventHistories: EventPriceHistory[] = [];
+  let fetchedCount = 0;
+  let skippedCount = 0;
+
+  for (const event of events) {
+    const history = await fetcher.fetchEventPriceHistory(event);
+    if (history) {
+      eventHistories.push(history);
+      fetchedCount++;
+    } else {
+      skippedCount++;
+    }
+
+    const total = fetchedCount + skippedCount;
+    if (total % 50 === 0) {
+      logger.info(`  Progress: ${total}/${events.length} events (${fetchedCount} with data, ${skippedCount} skipped)`);
+    }
+  }
+
+  logger.info(`Phase 1 complete: ${fetchedCount} events with price history, ${skippedCount} skipped.`);
+  return eventHistories;
 }
 
 main().catch((err) => {
