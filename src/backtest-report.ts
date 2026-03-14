@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { BacktestResults, BacktestStats, DailyReturn } from "./backtest-types";
+import { BacktestResults, BacktestStats, DailyReturn, BacktestConfig } from "./backtest-types";
 
 export class BacktestReport {
   /**
@@ -22,6 +22,7 @@ export class BacktestReport {
       ["Fee Rate", `${(results.config.feeRate * 100).toFixed(2)}%`],
       ["Gas Cost / Tx", `$${results.config.gasCostPerTx}`],
       ["Lookback", `${results.config.lookbackDays} days`],
+      ["Latency", results.config.latencyMs > 0 ? `${results.config.latencyMs}ms` : "instant"],
       ["Max Exposure", results.config.maxExposureUsdc > 0 ? `$${results.config.maxExposureUsdc}` : "unlimited"],
       ["Daily Loss Limit", results.config.dailyLossLimitUsdc > 0 ? `$${results.config.dailyLossLimitUsdc}` : "unlimited"],
       ["Min Liquidity", results.config.minLiquidityUsdc > 0 ? `$${results.config.minLiquidityUsdc}` : "none"],
@@ -84,12 +85,13 @@ export class BacktestReport {
     ]);
 
     // Risk Constraints
-    const totalSkipped = stats.tradesSkippedExposure + stats.tradesSkippedDailyLoss + stats.tradesSkippedLiquidity;
+    const totalSkipped = stats.tradesSkippedExposure + stats.tradesSkippedDailyLoss + stats.tradesSkippedLiquidity + stats.tradesSkippedCapital;
     if (totalSkipped > 0 || stats.dailyLossBreaches > 0) {
       this.printSection("Risk Constraints", [
         ["Skipped (Exposure)", stats.tradesSkippedExposure.toString()],
         ["Skipped (Daily Loss)", stats.tradesSkippedDailyLoss.toString()],
         ["Skipped (Liquidity)", stats.tradesSkippedLiquidity.toString()],
+        ["Skipped (Capital)", stats.tradesSkippedCapital.toString()],
         ["Total Skipped", chalk.yellow(totalSkipped.toString())],
         ["Daily Loss Breaches", stats.dailyLossBreaches.toString()],
       ]);
@@ -109,6 +111,77 @@ export class BacktestReport {
     if (results.equityCurve.length > 1) {
       this.printEquityCurve(results);
     }
+  }
+
+  /**
+   * Print a comparison table for multiple latency scenarios.
+   */
+  static printLatencyComparison(scenarios: Array<{ latencyMs: number; results: BacktestResults }>): void {
+    console.log(chalk.cyan("\n" +
+      "╔══════════════════════════════════════════════════════════════╗\n" +
+      "║           LATENCY IMPACT COMPARISON                          ║\n" +
+      "╚══════════════════════════════════════════════════════════════╝\n"
+    ));
+
+    // Header
+    const latencyLabels = scenarios.map((s) => s.latencyMs === 0 ? "Instant" : `${s.latencyMs}ms`);
+    const header = "  " + "Metric".padEnd(25) + latencyLabels.map((l) => l.padStart(14)).join("");
+    console.log(chalk.gray(header));
+    console.log(chalk.gray("  " + "-".repeat(25 + latencyLabels.length * 14)));
+
+    const rows: Array<{ label: string; values: string[]; colorFn?: (v: string, i: number) => string }> = [
+      {
+        label: "Total Trades",
+        values: scenarios.map((s) => s.results.stats.totalTrades.toString()),
+      },
+      {
+        label: "Win Rate",
+        values: scenarios.map((s) => `${(s.results.stats.winRate * 100).toFixed(1)}%`),
+      },
+      {
+        label: "Net Profit",
+        values: scenarios.map((s) => `$${s.results.stats.totalNetProfit.toFixed(2)}`),
+        colorFn: (v, i) => scenarios[i].results.stats.totalNetProfit >= 0 ? chalk.green(v) : chalk.red(v),
+      },
+      {
+        label: "Total Return",
+        values: scenarios.map((s) => `${(s.results.stats.totalReturn * 100).toFixed(2)}%`),
+        colorFn: (v, i) => scenarios[i].results.stats.totalReturn >= 0 ? chalk.green(v) : chalk.red(v),
+      },
+      {
+        label: "Avg Profit / Trade",
+        values: scenarios.map((s) => `$${s.results.stats.avgProfitPerTrade.toFixed(4)}`),
+      },
+      {
+        label: "Max Drawdown",
+        values: scenarios.map((s) => `${(s.results.stats.maxDrawdownPercent * 100).toFixed(2)}%`),
+      },
+      {
+        label: "Sharpe Ratio",
+        values: scenarios.map((s) => s.results.stats.sharpeRatio.toFixed(2)),
+      },
+      {
+        label: "Avg Spread",
+        values: scenarios.map((s) => `${(s.results.stats.avgSpread * 100).toFixed(2)}%`),
+      },
+      {
+        label: "Ending Capital",
+        values: scenarios.map((s) => `$${s.results.stats.endingCapital.toFixed(2)}`),
+        colorFn: (v, i) => scenarios[i].results.stats.endingCapital >= scenarios[i].results.config.startingCapital ? chalk.green(v) : chalk.red(v),
+      },
+    ];
+
+    for (const row of rows) {
+      let line = "  " + row.label.padEnd(25);
+      for (let i = 0; i < row.values.length; i++) {
+        const val = row.values[i];
+        const colored = row.colorFn ? row.colorFn(val, i) : chalk.white(val);
+        line += colored.padStart(14 + (colored.length - val.length));
+      }
+      console.log(line);
+    }
+
+    console.log("");
   }
 
   private static printSection(title: string, rows: [string, string][]): void {
