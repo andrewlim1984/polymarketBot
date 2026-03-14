@@ -269,6 +269,7 @@ export class TelonexFetcher {
   /**
    * Convert Telonex quote rows into PricePoint arrays for the backtest engine.
    * Uses mid-price (avg of bid and ask) as the price signal.
+   * Includes liquidity data (bid_size * bid_price or ask_size * ask_price in USDC).
    */
   private quotesToPricePoints(quotes: TelonexQuoteRow[]): PricePoint[] {
     const points: PricePoint[] = [];
@@ -283,7 +284,14 @@ export class TelonexFetcher {
       // Convert microseconds to seconds
       const timestamp = Number(q.timestamp_us) / 1_000_000;
 
-      points.push({ t: Math.floor(timestamp), p: midPrice });
+      // Compute available liquidity in USDC (min of bid-side and ask-side depth)
+      const bidSize = parseFloat(q.bid_size);
+      const askSize = parseFloat(q.ask_size);
+      const bidLiquidityUsdc = !isNaN(bidSize) ? bidSize * bid : 0;
+      const askLiquidityUsdc = !isNaN(askSize) ? askSize * ask : 0;
+      const liquidity = Math.min(bidLiquidityUsdc, askLiquidityUsdc);
+
+      points.push({ t: Math.floor(timestamp), p: midPrice, liquidity });
     }
 
     return points;

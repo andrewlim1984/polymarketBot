@@ -15,6 +15,14 @@ export class BacktestEngine {
   private config: BacktestConfig;
   private logger: Logger;
 
+  // Risk constraint tracking
+  private currentExposure = 0;
+  private dailyPnl = new Map<string, number>();
+  private skippedExposure = 0;
+  private skippedDailyLoss = 0;
+  private skippedLiquidity = 0;
+  private dailyLossBreaches = 0;
+
   constructor(config: BacktestConfig, logger: Logger) {
     this.config = config;
     this.logger = logger;
@@ -26,24 +34,35 @@ export class BacktestEngine {
   run(eventHistories: EventPriceHistory[]): BacktestResults {
     this.logger.info("Running backtest simulation...");
 
-    const trades: BacktestTrade[] = [];
+    // Reset risk state
+    this.currentExposure = 0;
+    this.dailyPnl.clear();
+    this.skippedExposure = 0;
+    this.skippedDailyLoss = 0;
+    this.skippedLiquidity = 0;
+    this.dailyLossBreaches = 0;
+
+    const candidateTrades: BacktestTrade[] = [];
 
     for (const eventHistory of eventHistories) {
       // Single-market arbitrage: check each market's YES+NO sum
       for (const market of eventHistory.markets) {
         const singleTrades = this.simulateSingleMarket(market);
-        trades.push(...singleTrades);
+        candidateTrades.push(...singleTrades);
       }
 
       // Multi-market arbitrage: check sum of all YES prices across markets in event
       if (eventHistory.markets.length >= 2) {
         const multiTrades = this.simulateMultiMarket(eventHistory);
-        trades.push(...multiTrades);
+        candidateTrades.push(...multiTrades);
       }
     }
 
-    // Sort trades by timestamp
-    trades.sort((a, b) => a.timestamp - b.timestamp);
+    // Sort all candidates by timestamp to simulate chronological execution
+    candidateTrades.sort((a, b) => a.timestamp - b.timestamp);
+
+    // Apply risk constraints in chronological order
+    const trades = this.applyRiskConstraints(candidateTrades);
 
     // Build equity curve and daily returns
     const equityCurve = this.buildEquityCurve(trades);
@@ -64,13 +83,79 @@ export class BacktestEngine {
   }
 
   /**
+   * Apply risk constraints to candidate trades in chronological order.
+   * Enforces max exposure, daily loss limit, and liquidity minimum.
+   */
+  private applyRiskConstraints(candidates: BacktestTrade[]): BacktestTrade[] {
+    const accepted: BacktestTrade[] = [];
+    let exposure = 0;
+    const dailyPnlMap = new Map<string, number>();
+    const breachedDays = new Set<string>();
+
+    for (const trade of candidates) {
+      const tradeDate = new Date(trade.timestamp * 1000).toISOString().split("T")[0];
+
+      // Check daily loss limit
+      if (this.config.dailyLossLimitUsdc > 0) {
+        const dayPnl = dailyPnlMap.get(tradeDate) || 0;
+        if (dayPnl < 0 && Math.abs(dayPnl) >= this.config.dailyLossLimitUsdc) {
+          if (!breachedDays.has(tradeDate)) {
+            breachedDays.add(tradeDate);
+            this.dailyLossBreaches++;
+          }
+          this.skippedDailyLoss++;
+          continue;
+        }
+      }
+
+      // Check max exposure
+      if (this.config.maxExposureUsdc > 0) {
+        if (exposure + trade.costUsdc > this.config.maxExposureUsdc) {
+          this.skippedExposure++;
+          continue;
+        }
+      }
+
+      // Check liquidity (if available on the trade)
+      if (this.config.minLiquidityUsdc > 0 && trade.liquidityUsdc !== undefined) {
+        if (trade.liquidityUsdc < this.config.minLiquidityUsdc) {
+          this.skippedLiquidity++;
+          continue;
+        }
+      }
+
+      // Trade passes all risk checks
+      accepted.push(trade);
+
+      // Update exposure (add cost, reduce by payout on resolution — simplified as immediate)
+      exposure += trade.costUsdc;
+      // Assume positions resolve quickly, reducing exposure
+      exposure = Math.max(0, exposure - trade.payoutUsdc);
+
+      // Update daily PnL
+      const currentDayPnl = dailyPnlMap.get(tradeDate) || 0;
+      dailyPnlMap.set(tradeDate, currentDayPnl + trade.netProfitUsdc);
+    }
+
+    if (this.skippedExposure > 0 || this.skippedDailyLoss > 0 || this.skippedLiquidity > 0) {
+      this.logger.info(
+        `Risk constraints: ${this.skippedExposure} skipped (exposure), ` +
+        `${this.skippedDailyLoss} skipped (daily loss), ` +
+        `${this.skippedLiquidity} skipped (liquidity)`
+      );
+    }
+
+    return accepted;
+  }
+
+  /**
    * Simulate single-market arbitrage: at each timestamp, check if YES + NO < 1.0.
    */
   private simulateSingleMarket(market: MarketPriceHistory): BacktestTrade[] {
     const trades: BacktestTrade[] = [];
     const aligned = this.alignTimeSeries(market.yesHistory, market.noHistory);
 
-    for (const { t, yesPrice, noPrice } of aligned) {
+    for (const { t, yesPrice, noPrice, yesLiquidity, noLiquidity } of aligned) {
       const priceSum = yesPrice + noPrice;
       const spread = 1.0 - priceSum;
 
@@ -84,6 +169,11 @@ export class BacktestEngine {
         const fees = payoutUsdc * this.config.feeRate + this.config.gasCostPerTx * 2; // 2 orders
         const netProfit = grossProfit - fees;
 
+        // Compute minimum liquidity across both sides
+        const liquidityUsdc = (yesLiquidity !== undefined && noLiquidity !== undefined)
+          ? Math.min(yesLiquidity, noLiquidity)
+          : undefined;
+
         trades.push({
           timestamp: t,
           type: "single-market",
@@ -96,6 +186,7 @@ export class BacktestEngine {
           grossProfitUsdc: grossProfit,
           feesUsdc: fees,
           netProfitUsdc: netProfit,
+          liquidityUsdc,
         });
       }
     }
@@ -117,15 +208,19 @@ export class BacktestEngine {
 
     for (const t of commonTimestamps) {
       const yesPrices: number[] = [];
+      const liquidities: number[] = [];
       let valid = true;
 
       for (const history of yesHistories) {
-        const point = this.findClosestPrice(history, t);
+        const point = this.findClosestPoint(history, t);
         if (point === null) {
           valid = false;
           break;
         }
-        yesPrices.push(point);
+        yesPrices.push(point.p);
+        if (point.liquidity !== undefined) {
+          liquidities.push(point.liquidity);
+        }
       }
 
       if (!valid) continue;
@@ -142,6 +237,10 @@ export class BacktestEngine {
         const fees = payoutUsdc * this.config.feeRate + this.config.gasCostPerTx * numOrders;
         const netProfit = grossProfit - fees;
 
+        const liquidityUsdc = liquidities.length === yesHistories.length
+          ? Math.min(...liquidities)
+          : undefined;
+
         trades.push({
           timestamp: t,
           type: "multi-market",
@@ -153,6 +252,7 @@ export class BacktestEngine {
           grossProfitUsdc: grossProfit,
           feesUsdc: fees,
           netProfitUsdc: netProfit,
+          liquidityUsdc,
         });
       }
     }
@@ -167,26 +267,32 @@ export class BacktestEngine {
     yesHistory: PricePoint[],
     noHistory: PricePoint[],
     toleranceSec = 300
-  ): Array<{ t: number; yesPrice: number; noPrice: number }> {
-    const result: Array<{ t: number; yesPrice: number; noPrice: number }> = [];
+  ): Array<{ t: number; yesPrice: number; noPrice: number; yesLiquidity?: number; noLiquidity?: number }> {
+    const result: Array<{ t: number; yesPrice: number; noPrice: number; yesLiquidity?: number; noLiquidity?: number }> = [];
 
-    // Build a map of NO prices by timestamp for quick lookup
-    const noMap = new Map<number, number>();
+    // Build a map of NO points by timestamp for quick lookup
+    const noMap = new Map<number, PricePoint>();
     for (const point of noHistory) {
-      noMap.set(point.t, point.p);
+      noMap.set(point.t, point);
     }
 
     for (const yesPoint of yesHistory) {
       // Try exact match first
-      let noPrice = noMap.get(yesPoint.t);
+      let noPoint = noMap.get(yesPoint.t);
 
       // If no exact match, search within tolerance
-      if (noPrice === undefined) {
-        noPrice = this.findClosestPrice(noHistory, yesPoint.t, toleranceSec) ?? undefined;
+      if (!noPoint) {
+        noPoint = this.findClosestPoint(noHistory, yesPoint.t, toleranceSec) ?? undefined;
       }
 
-      if (noPrice !== undefined) {
-        result.push({ t: yesPoint.t, yesPrice: yesPoint.p, noPrice });
+      if (noPoint) {
+        result.push({
+          t: yesPoint.t,
+          yesPrice: yesPoint.p,
+          noPrice: noPoint.p,
+          yesLiquidity: yesPoint.liquidity,
+          noLiquidity: noPoint.liquidity,
+        });
       }
     }
 
@@ -194,13 +300,13 @@ export class BacktestEngine {
   }
 
   /**
-   * Find the price closest to a target timestamp within a tolerance window.
+   * Find the point closest to a target timestamp within a tolerance window.
    */
-  private findClosestPrice(
+  private findClosestPoint(
     history: PricePoint[],
     targetTs: number,
     toleranceSec = 300
-  ): number | null {
+  ): PricePoint | null {
     let closest: PricePoint | null = null;
     let minDiff = Infinity;
 
@@ -212,7 +318,7 @@ export class BacktestEngine {
       }
     }
 
-    return closest ? closest.p : null;
+    return closest;
   }
 
   /**
@@ -232,7 +338,7 @@ export class BacktestEngine {
       let foundInAll = true;
 
       for (let i = 1; i < histories.length; i++) {
-        const match = this.findClosestPrice(histories[i], point.t, toleranceSec);
+        const match = this.findClosestPoint(histories[i], point.t, toleranceSec);
         if (match === null) {
           foundInAll = false;
           break;
@@ -405,6 +511,10 @@ export class BacktestEngine {
       avgTradesPerDay: durationDays > 0 ? trades.length / durationDays : trades.length,
       bestDay: { date: bestDay.date, pnl: bestDay.pnl },
       worstDay: { date: worstDay.date, pnl: worstDay.pnl },
+      tradesSkippedExposure: this.skippedExposure,
+      tradesSkippedDailyLoss: this.skippedDailyLoss,
+      tradesSkippedLiquidity: this.skippedLiquidity,
+      dailyLossBreaches: this.dailyLossBreaches,
     };
   }
 
