@@ -1,5 +1,5 @@
 import { Logger } from "./logger";
-import { BacktestConfig, EventPriceHistory } from "./backtest-types";
+import { BacktestConfig, BacktestResults, EventPriceHistory } from "./backtest-types";
 import { BacktestFetcher } from "./backtest-fetcher";
 import { TelonexFetcher } from "./telonex-fetcher";
 import { BacktestEngine } from "./backtest-engine";
@@ -30,6 +30,8 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env") });
  *   BACKTEST_MAX_EXPOSURE   - Max total exposure USDC, 0 = unlimited (default: 500)
  *   BACKTEST_DAILY_LOSS     - Daily loss limit USDC, 0 = unlimited (default: 100)
  *   BACKTEST_MIN_LIQUIDITY  - Min orderbook depth USDC, 0 = no filter (default: 100)
+ *   BACKTEST_LATENCY_MS     - Simulated latency in ms, 0 = instant (default: 0)
+ *   BACKTEST_LATENCY_COMPARE - Set to "true" to run 3 latency scenarios (250, 500, 1000ms)
  */
 
 async function main(): Promise<void> {
@@ -58,7 +60,10 @@ async function main(): Promise<void> {
     maxExposureUsdc: parseFloat(process.env.BACKTEST_MAX_EXPOSURE || process.env.MAX_TOTAL_EXPOSURE_USDC || "500"),
     dailyLossLimitUsdc: parseFloat(process.env.BACKTEST_DAILY_LOSS || process.env.DAILY_LOSS_LIMIT_USDC || "100"),
     minLiquidityUsdc: parseFloat(process.env.BACKTEST_MIN_LIQUIDITY || process.env.MIN_LIQUIDITY_USDC || "100"),
+    latencyMs: parseInt(process.env.BACKTEST_LATENCY_MS || "0", 10),
   };
+
+  const runLatencyComparison = process.env.BACKTEST_LATENCY_COMPARE === "true";
 
   logger.info(`Data source: ${source.toUpperCase()}`);
   logger.info(`Backtest config: ${JSON.stringify({
@@ -72,6 +77,8 @@ async function main(): Promise<void> {
     maxExposure: config.maxExposureUsdc > 0 ? `$${config.maxExposureUsdc}` : "unlimited",
     dailyLossLimit: config.dailyLossLimitUsdc > 0 ? `$${config.dailyLossLimitUsdc}` : "unlimited",
     minLiquidity: config.minLiquidityUsdc > 0 ? `$${config.minLiquidityUsdc}` : "none",
+    latency: config.latencyMs > 0 ? `${config.latencyMs}ms` : "instant",
+    latencyComparison: runLatencyComparison ? "enabled (250ms, 500ms, 1s)" : "disabled",
   })}`);
 
   let eventHistories: EventPriceHistory[];
@@ -88,40 +95,79 @@ async function main(): Promise<void> {
   }
 
   // Phase 2: Run simulation
-  logger.info("Phase 2: Running backtest simulation...");
-  const engine = new BacktestEngine(config, logger);
-  const results = engine.run(eventHistories);
+  if (runLatencyComparison) {
+    // Run 3 latency scenarios: 250ms, 500ms, 1000ms
+    const latencies = [250, 500, 1000];
+    const scenarios: Array<{ latencyMs: number; results: BacktestResults }> = [];
 
-  // Phase 3: Print report
-  logger.info("Phase 3: Generating report...");
-  BacktestReport.print(results);
+    for (const latencyMs of latencies) {
+      const scenarioConfig = { ...config, latencyMs };
+      logger.info(`\nPhase 2: Running backtest with ${latencyMs}ms latency...`);
+      const engine = new BacktestEngine(scenarioConfig, logger);
+      const results = engine.run(eventHistories);
+      scenarios.push({ latencyMs, results });
 
-  // Export results to JSON
-  const outputPath = path.resolve(process.cwd(), "backtest-results.json");
-  fs.writeFileSync(
-    outputPath,
-    JSON.stringify(
-      {
-        config: results.config,
-        stats: results.stats,
-        dailyReturns: results.dailyReturns,
-        tradeCount: results.trades.length,
-        topTrades: results.trades
-          .sort((a, b) => b.netProfitUsdc - a.netProfitUsdc)
-          .slice(0, 50)
-          .map((t) => ({
-            date: new Date(t.timestamp * 1000).toISOString(),
-            type: t.type,
-            event: t.eventTitle,
-            spread: t.spread,
-            netProfit: t.netProfitUsdc,
+      // Print individual report
+      BacktestReport.print(results);
+    }
+
+    // Print comparison table
+    BacktestReport.printLatencyComparison(scenarios);
+
+    // Export all results to JSON
+    const outputPath = path.resolve(process.cwd(), "backtest-results.json");
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(
+        {
+          latencyComparison: scenarios.map((s) => ({
+            latencyMs: s.latencyMs,
+            config: s.results.config,
+            stats: s.results.stats,
+            tradeCount: s.results.trades.length,
           })),
-      },
-      null,
-      2
-    )
-  );
-  logger.success(`Results exported to ${outputPath}`);
+        },
+        null,
+        2
+      )
+    );
+    logger.success(`Results exported to ${outputPath}`);
+  } else {
+    logger.info("Phase 2: Running backtest simulation...");
+    const engine = new BacktestEngine(config, logger);
+    const results = engine.run(eventHistories);
+
+    // Phase 3: Print report
+    logger.info("Phase 3: Generating report...");
+    BacktestReport.print(results);
+
+    // Export results to JSON
+    const outputPath = path.resolve(process.cwd(), "backtest-results.json");
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(
+        {
+          config: results.config,
+          stats: results.stats,
+          dailyReturns: results.dailyReturns,
+          tradeCount: results.trades.length,
+          topTrades: results.trades
+            .sort((a, b) => b.netProfitUsdc - a.netProfitUsdc)
+            .slice(0, 50)
+            .map((t) => ({
+              date: new Date(t.timestamp * 1000).toISOString(),
+              type: t.type,
+              event: t.eventTitle,
+              spread: t.spread,
+              netProfit: t.netProfitUsdc,
+            })),
+        },
+        null,
+        2
+      )
+    );
+    logger.success(`Results exported to ${outputPath}`);
+  }
 }
 
 /**

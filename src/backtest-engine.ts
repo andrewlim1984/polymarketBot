@@ -21,6 +21,7 @@ export class BacktestEngine {
   private skippedExposure = 0;
   private skippedDailyLoss = 0;
   private skippedLiquidity = 0;
+  private skippedCapital = 0;
   private dailyLossBreaches = 0;
 
   constructor(config: BacktestConfig, logger: Logger) {
@@ -40,6 +41,7 @@ export class BacktestEngine {
     this.skippedExposure = 0;
     this.skippedDailyLoss = 0;
     this.skippedLiquidity = 0;
+    this.skippedCapital = 0;
     this.dailyLossBreaches = 0;
 
     const candidateTrades: BacktestTrade[] = [];
@@ -84,16 +86,23 @@ export class BacktestEngine {
 
   /**
    * Apply risk constraints to candidate trades in chronological order.
-   * Enforces max exposure, daily loss limit, and liquidity minimum.
+   * Enforces max exposure, daily loss limit, liquidity minimum, and capital depletion.
    */
   private applyRiskConstraints(candidates: BacktestTrade[]): BacktestTrade[] {
     const accepted: BacktestTrade[] = [];
     let exposure = 0;
+    let capital = this.config.startingCapital;
     const dailyPnlMap = new Map<string, number>();
     const breachedDays = new Set<string>();
 
     for (const trade of candidates) {
       const tradeDate = new Date(trade.timestamp * 1000).toISOString().split("T")[0];
+
+      // Check capital depletion — can't trade if we don't have enough capital
+      if (capital < trade.costUsdc) {
+        this.skippedCapital++;
+        continue;
+      }
 
       // Check daily loss limit
       if (this.config.dailyLossLimitUsdc > 0) {
@@ -127,6 +136,9 @@ export class BacktestEngine {
       // Trade passes all risk checks
       accepted.push(trade);
 
+      // Update capital
+      capital += trade.netProfitUsdc;
+
       // Update exposure (add cost, reduce by payout on resolution — simplified as immediate)
       exposure += trade.costUsdc;
       // Assume positions resolve quickly, reducing exposure
@@ -137,11 +149,13 @@ export class BacktestEngine {
       dailyPnlMap.set(tradeDate, currentDayPnl + trade.netProfitUsdc);
     }
 
-    if (this.skippedExposure > 0 || this.skippedDailyLoss > 0 || this.skippedLiquidity > 0) {
+    const totalSkipped = this.skippedExposure + this.skippedDailyLoss + this.skippedLiquidity + this.skippedCapital;
+    if (totalSkipped > 0) {
       this.logger.info(
         `Risk constraints: ${this.skippedExposure} skipped (exposure), ` +
         `${this.skippedDailyLoss} skipped (daily loss), ` +
-        `${this.skippedLiquidity} skipped (liquidity)`
+        `${this.skippedLiquidity} skipped (liquidity), ` +
+        `${this.skippedCapital} skipped (capital depleted)`
       );
     }
 
@@ -150,28 +164,49 @@ export class BacktestEngine {
 
   /**
    * Simulate single-market arbitrage: at each timestamp, check if YES + NO < 1.0.
+   * If latency is configured, uses the price at T + latency for execution.
    */
   private simulateSingleMarket(market: MarketPriceHistory): BacktestTrade[] {
     const trades: BacktestTrade[] = [];
     const aligned = this.alignTimeSeries(market.yesHistory, market.noHistory);
+    const latencySec = (this.config.latencyMs || 0) / 1000;
 
     for (const { t, yesPrice, noPrice, yesLiquidity, noLiquidity } of aligned) {
       const priceSum = yesPrice + noPrice;
       const spread = 1.0 - priceSum;
 
       if (spread > this.config.minSpread) {
+        // Determine execution prices (apply latency if configured)
+        let execYesPrice = yesPrice;
+        let execNoPrice = noPrice;
+        let execYesLiquidity = yesLiquidity;
+        let execNoLiquidity = noLiquidity;
+
+        if (latencySec > 0) {
+          const delayedYes = this.findNextPointAfter(market.yesHistory, t + latencySec);
+          const delayedNo = this.findNextPointAfter(market.noHistory, t + latencySec);
+          if (delayedYes && delayedNo) {
+            execYesPrice = delayedYes.p;
+            execNoPrice = delayedNo.p;
+            execYesLiquidity = delayedYes.liquidity;
+            execNoLiquidity = delayedNo.liquidity;
+          }
+        }
+
+        const execPriceSum = execYesPrice + execNoPrice;
+        // Skip if spread disappeared by execution time (prices moved to sum >= 1.0)
+        if (execPriceSum >= 1.0) continue;
+
+        const execSpread = 1.0 - execPriceSum;
         const costUsdc = this.config.tradeSizeUsdc;
-        // How many "sets" of YES+NO can we buy?
-        const sets = costUsdc / priceSum;
-        const payoutUsdc = sets * 1.0; // Each set pays $1
+        const sets = costUsdc / execPriceSum;
+        const payoutUsdc = sets * 1.0;
         const grossProfit = payoutUsdc - costUsdc;
-        // Fees: applied on the payout (Polymarket charges on proceeds)
-        const fees = payoutUsdc * this.config.feeRate + this.config.gasCostPerTx * 2; // 2 orders
+        const fees = payoutUsdc * this.config.feeRate + this.config.gasCostPerTx * 2;
         const netProfit = grossProfit - fees;
 
-        // Compute minimum liquidity across both sides
-        const liquidityUsdc = (yesLiquidity !== undefined && noLiquidity !== undefined)
-          ? Math.min(yesLiquidity, noLiquidity)
+        const liquidityUsdc = (execYesLiquidity !== undefined && execNoLiquidity !== undefined)
+          ? Math.min(execYesLiquidity, execNoLiquidity)
           : undefined;
 
         trades.push({
@@ -179,8 +214,8 @@ export class BacktestEngine {
           type: "single-market",
           eventTitle: market.eventTitle,
           marketQuestion: market.question,
-          priceSum,
-          spread,
+          priceSum: execPriceSum,
+          spread: execSpread,
           costUsdc,
           payoutUsdc,
           grossProfitUsdc: grossProfit,
@@ -196,9 +231,11 @@ export class BacktestEngine {
 
   /**
    * Simulate multi-market arbitrage: at each timestamp, check if sum of all YES < 1.0.
+   * If latency is configured, uses the price at T + latency for execution.
    */
   private simulateMultiMarket(eventHistory: EventPriceHistory): BacktestTrade[] {
     const trades: BacktestTrade[] = [];
+    const latencySec = (this.config.latencyMs || 0) / 1000;
 
     // Get all YES histories
     const yesHistories = eventHistory.markets.map((m) => m.yesHistory);
@@ -229,24 +266,56 @@ export class BacktestEngine {
       const spread = 1.0 - priceSum;
 
       if (spread > this.config.minSpread) {
+        // Apply latency: look up prices at T + latency for execution
+        let execPrices = yesPrices;
+        let execLiquidities = liquidities;
+
+        if (latencySec > 0) {
+          const delayedPrices: number[] = [];
+          const delayedLiquidities: number[] = [];
+          let delayedValid = true;
+
+          for (const history of yesHistories) {
+            const delayedPoint = this.findNextPointAfter(history, t + latencySec);
+            if (delayedPoint === null) {
+              delayedValid = false;
+              break;
+            }
+            delayedPrices.push(delayedPoint.p);
+            if (delayedPoint.liquidity !== undefined) {
+              delayedLiquidities.push(delayedPoint.liquidity);
+            }
+          }
+
+          if (delayedValid) {
+            execPrices = delayedPrices;
+            execLiquidities = delayedLiquidities;
+          }
+        }
+
+        const execPriceSum = execPrices.reduce((a, b) => a + b, 0);
+        // Skip if spread disappeared by execution time
+        if (execPriceSum >= 1.0) continue;
+
+        const execSpread = 1.0 - execPriceSum;
         const costUsdc = this.config.tradeSizeUsdc;
-        const sets = costUsdc / priceSum;
+        const sets = costUsdc / execPriceSum;
         const payoutUsdc = sets * 1.0;
         const grossProfit = payoutUsdc - costUsdc;
         const numOrders = eventHistory.markets.length;
         const fees = payoutUsdc * this.config.feeRate + this.config.gasCostPerTx * numOrders;
         const netProfit = grossProfit - fees;
 
-        const liquidityUsdc = liquidities.length === yesHistories.length
-          ? Math.min(...liquidities)
+        const liquidityUsdc = execLiquidities.length === yesHistories.length
+          ? Math.min(...execLiquidities)
           : undefined;
 
         trades.push({
           timestamp: t,
           type: "multi-market",
           eventTitle: eventHistory.eventTitle,
-          priceSum,
-          spread,
+          priceSum: execPriceSum,
+          spread: execSpread,
           costUsdc,
           payoutUsdc,
           grossProfitUsdc: grossProfit,
@@ -319,6 +388,37 @@ export class BacktestEngine {
     }
 
     return closest;
+  }
+
+  /**
+   * Find the first point at or after a target timestamp.
+   * Used for latency simulation: after detection at T, find the price at T + latency.
+   * Falls back to closest point within 300s tolerance if no point exists after target.
+   */
+  private findNextPointAfter(
+    history: PricePoint[],
+    targetTs: number
+  ): PricePoint | null {
+    // Binary search for efficiency on sorted arrays
+    let lo = 0;
+    let hi = history.length - 1;
+
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if (history[mid].t < targetTs) {
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+
+    // lo is now the index of the first point >= targetTs
+    if (lo < history.length) {
+      return history[lo];
+    }
+
+    // No point after target; fall back to closest within tolerance
+    return this.findClosestPoint(history, targetTs);
   }
 
   /**
@@ -514,6 +614,7 @@ export class BacktestEngine {
       tradesSkippedExposure: this.skippedExposure,
       tradesSkippedDailyLoss: this.skippedDailyLoss,
       tradesSkippedLiquidity: this.skippedLiquidity,
+      tradesSkippedCapital: this.skippedCapital,
       dailyLossBreaches: this.dailyLossBreaches,
     };
   }

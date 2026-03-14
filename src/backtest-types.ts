@@ -80,6 +80,8 @@ export interface BacktestConfig {
   dailyLossLimitUsdc: number;
   /** Minimum orderbook liquidity (USDC) to consider a trade. 0 = no filter */
   minLiquidityUsdc: number;
+  /** Simulated latency in milliseconds between detection and execution. 0 = instant */
+  latencyMs: number;
 }
 
 /** Full backtest results and statistics */
@@ -156,5 +158,6 @@ export interface BacktestStats {
   tradesSkippedExposure: number;
   tradesSkippedDailyLoss: number;
   tradesSkippedLiquidity: number;
+  tradesSkippedCapital: number;
   dailyLossBreaches: number;
 }
