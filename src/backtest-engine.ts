@@ -454,7 +454,7 @@ export class BacktestEngine {
     // Profit factor
     const grossWins = winningTrades.reduce((s, t) => s + t.netProfitUsdc, 0);
     const grossLosses = Math.abs(losingTrades.reduce((s, t) => s + t.netProfitUsdc, 0));
-    const profitFactor = grossLosses > 0 ? grossWins / grossLosses : grossWins > 0 ? Infinity : 0;
+    const profitFactor = grossLosses > 0 ? grossWins / grossLosses : 0;
 
     // Best/worst day
     const bestDay = dailyReturns.length > 0
@@ -468,9 +468,9 @@ export class BacktestEngine {
     const totalReturn = this.config.startingCapital > 0
       ? totalNetProfit / this.config.startingCapital
       : 0;
-    const annualizedReturn = durationDays > 0
-      ? Math.pow(1 + totalReturn, 365 / durationDays) - 1
-      : 0;
+    // Use at least 1 day to avoid Infinity when all trades happen on same day
+    const effectiveDays = Math.max(durationDays, 1);
+    const annualizedReturn = Math.pow(1 + totalReturn, 365 / effectiveDays) - 1;
 
     // Calmar ratio
     const calmarRatio = maxDrawdownPercent > 0
@@ -508,7 +508,7 @@ export class BacktestEngine {
       endingCapital,
       peakCapital,
       troughCapital,
-      avgTradesPerDay: durationDays > 0 ? trades.length / durationDays : trades.length,
+      avgTradesPerDay: trades.length / Math.max(durationDays, 1),
       bestDay: { date: bestDay.date, pnl: bestDay.pnl },
       worstDay: { date: worstDay.date, pnl: worstDay.pnl },
       tradesSkippedExposure: this.skippedExposure,
@@ -565,7 +565,7 @@ export class BacktestEngine {
       (dailyPnls.length - 1);
     const stdDev = Math.sqrt(variance);
 
-    if (stdDev === 0) return mean > 0 ? Infinity : 0;
+    if (stdDev === 0) return 0;
 
     // Daily risk-free rate (5% annualized)
     const dailyRf = Math.pow(1.05, 1 / 365) - 1;
@@ -583,14 +583,14 @@ export class BacktestEngine {
     const mean = dailyPnls.reduce((a, b) => a + b, 0) / dailyPnls.length;
     const downsidePnls = dailyPnls.filter((p) => p < 0);
 
-    if (downsidePnls.length === 0) return mean > 0 ? Infinity : 0;
+    if (downsidePnls.length === 0) return 0;
 
     const downsideVariance =
       downsidePnls.reduce((sum, pnl) => sum + Math.pow(pnl, 2), 0) /
       downsidePnls.length;
     const downsideDev = Math.sqrt(downsideVariance);
 
-    if (downsideDev === 0) return mean > 0 ? Infinity : 0;
+    if (downsideDev === 0) return 0;
 
     const dailyRf = Math.pow(1.05, 1 / 365) - 1;
     const dailyRfUsdc = dailyRf * this.config.startingCapital;
