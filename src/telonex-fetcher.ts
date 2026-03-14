@@ -226,7 +226,8 @@ export class TelonexFetcher {
         if (error.response?.status === 429) {
           this.logger.warn("Telonex rate limited, waiting 5s...");
           await this.sleep(5000);
-          return this.downloadQuotes(slug, outcome, date);
+          // Retry non-recursively handled by caller
+          return [];
         }
         if (error.response?.status === 401 || error.response?.status === 403) {
           this.logger.error("Telonex API key is invalid or insufficient permissions.");
@@ -343,26 +344,31 @@ export class TelonexFetcher {
 
       if (marketDates.length === 0) continue;
 
-      // Download quotes for each date
+      // Download quotes for each date and convert to PricePoints incrementally
+      // to avoid accumulating massive arrays of raw quote rows
+      const downsampleInterval = this.getDownsampleInterval();
+      let yesHistory: PricePoint[] = [];
+      let noHistory: PricePoint[] = [];
+
       for (const date of marketDates) {
         const [yesData, noData] = await Promise.all([
           this.downloadQuotes(market.slug, market.outcome0, date),
           this.downloadQuotes(market.slug, market.outcome1, date),
         ]);
 
-        yesQuotes.push(...yesData);
-        noQuotes.push(...noData);
+        // Convert each day's quotes to PricePoints immediately instead of
+        // accumulating all raw rows (avoids stack overflow from spread operator)
+        const dayYes = this.quotesToPricePoints(yesData);
+        const dayNo = this.quotesToPricePoints(noData);
+
+        for (let i = 0; i < dayYes.length; i++) yesHistory.push(dayYes[i]);
+        for (let i = 0; i < dayNo.length; i++) noHistory.push(dayNo[i]);
 
         // Small delay to respect rate limits
         await this.sleep(50);
       }
 
-      if (yesQuotes.length === 0 && noQuotes.length === 0) continue;
-
-      // Convert to PricePoints and downsample
-      const downsampleInterval = this.getDownsampleInterval();
-      let yesHistory = this.quotesToPricePoints(yesQuotes);
-      let noHistory = this.quotesToPricePoints(noQuotes);
+      if (yesHistory.length === 0 && noHistory.length === 0) continue;
 
       if (downsampleInterval > 0) {
         yesHistory = this.downsample(yesHistory, downsampleInterval);
