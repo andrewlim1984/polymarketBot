@@ -137,3 +137,6 @@ vite.config.ts.timestamp-*
 
 # OS files
 .DS_Store
+
+# Backtest output
+backtest-results.json

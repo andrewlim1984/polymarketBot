@@ -24,6 +24,7 @@ When the combined price is **less than $1.00**, you can buy both sides and guara
 - **Auto-Trading Engine**: Places orders via the official `@polymarket/clob-client` SDK
 - **Risk Management**: Configurable trade limits, daily loss caps, and kill switch
 - **Scan-Only Mode**: Run without a wallet to just monitor opportunities
+- **Backtesting Engine**: Simulate the strategy on historical data with full statistics (PnL, Sharpe, max drawdown, equity curve)
 
 ## Quick Start
 
@@ -76,6 +77,28 @@ Run a single scan to see current opportunities:
 npm run scan
 ```
 
+#### Backtest Mode (No wallet needed)
+
+Run a historical backtest to simulate returns:
+
+```bash
+npm run backtest
+```
+
+Customize backtest parameters via environment variables:
+
+```bash
+BACKTEST_CAPITAL=10000 BACKTEST_LOOKBACK_DAYS=30 BACKTEST_MAX_EVENTS=200 npm run backtest
+```
+
+The backtest outputs:
+- Full PnL breakdown (gross profit, fees, net profit)
+- Risk metrics (Sharpe ratio, Sortino ratio, max drawdown, Calmar ratio)
+- Win rate, profit factor, daily returns table
+- Top 10 most profitable trades
+- ASCII equity curve
+- JSON export to `backtest-results.json`
+
 #### Full Bot Mode
 
 Start the continuous scanner with optional auto-trading:
@@ -107,20 +130,34 @@ npm start
 | `DAILY_LOSS_LIMIT_USDC` | `100` | Daily loss limit before kill switch |
 | `MIN_LIQUIDITY_USDC` | `100` | Min orderbook liquidity to trade |
 | `ORDER_TYPE` | `FOK` | `FOK` (Fill-or-Kill) or `GTC` (Good-Til-Cancelled) |
+| `BACKTEST_CAPITAL` | `10000` | Starting capital for backtest (USDC) |
+| `BACKTEST_TRADE_SIZE` | `100` | Trade size per opportunity in backtest |
+| `BACKTEST_MIN_SPREAD` | `0.02` | Min spread threshold for backtest |
+| `BACKTEST_FEE_RATE` | `0.02` | Simulated fee rate (0.02 = 2%) |
+| `BACKTEST_GAS_COST` | `0.007` | Gas cost per transaction (USDC) |
+| `BACKTEST_LOOKBACK_DAYS` | `30` | Days of historical data to fetch |
+| `BACKTEST_INTERVAL` | `1h` | Price history interval (1h/6h/1d/1w/max) |
+| `BACKTEST_FIDELITY` | `500` | Number of data points per token |
+| `BACKTEST_MAX_EVENTS` | `200` | Max events to backtest (0 = all) |
 
 ## Architecture
 
 ```
 src/
-├── index.ts        # Main entry point - orchestrates all modules
-├── scan-only.ts    # Standalone single-scan mode
-├── config.ts       # Configuration loader (.env)
-├── types.ts        # TypeScript interfaces
-├── scanner.ts      # Market scanner (Gamma API)
-├── monitor.ts      # WebSocket real-time price monitor
-├── trader.ts       # Trading engine (CLOB API)
-├── risk.ts         # Risk management
-└── logger.ts       # Colored console output
+├── index.ts              # Main entry point - orchestrates all modules
+├── scan-only.ts          # Standalone single-scan mode
+├── backtest.ts           # Backtest CLI entry point
+├── backtest-types.ts     # Backtest type definitions
+├── backtest-fetcher.ts   # Historical price data fetcher
+├── backtest-engine.ts    # Backtest simulation engine
+├── backtest-report.ts    # Statistics & report printer
+├── config.ts             # Configuration loader (.env)
+├── types.ts              # TypeScript interfaces
+├── scanner.ts            # Market scanner (Gamma API)
+├── monitor.ts            # WebSocket real-time price monitor
+├── trader.ts             # Trading engine (CLOB API)
+├── risk.ts               # Risk management
+└── logger.ts             # Colored console output
 ```
 
 ## API Endpoints Used
