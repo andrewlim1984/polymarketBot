@@ -47,8 +47,8 @@ async function main(): Promise<void> {
 
   const config: BacktestConfig = {
     startingCapital: parseFloat(process.env.BACKTEST_CAPITAL || "10000"),
-    tradeSizeUsdc: parseFloat(process.env.BACKTEST_TRADE_SIZE || "100"),
-    minSpread: parseFloat(process.env.BACKTEST_MIN_SPREAD || "0.02"),
+    tradeSizeUsdc: parseFloat(process.env.BACKTEST_TRADE_SIZE || process.env.MAX_TRADE_SIZE_USDC || "100"),
+    minSpread: parseFloat(process.env.BACKTEST_MIN_SPREAD || process.env.MIN_SPREAD_THRESHOLD || "0.02"),
     feeRate: parseFloat(process.env.BACKTEST_FEE_RATE || "0.02"),
     gasCostPerTx: parseFloat(process.env.BACKTEST_GAS_COST || "0.007"),
     lookbackDays: parseInt(process.env.BACKTEST_LOOKBACK_DAYS || "30", 10),
