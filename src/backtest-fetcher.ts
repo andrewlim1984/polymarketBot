@@ -112,7 +112,7 @@ export class BacktestFetcher {
   /**
    * Fetch historical prices for a specific token ID.
    */
-  async fetchTokenPriceHistory(tokenId: string): Promise<PricePoint[]> {
+  async fetchTokenPriceHistory(tokenId: string, retryCount = 0): Promise<PricePoint[]> {
     try {
       const endTs = Math.floor(Date.now() / 1000);
       const startTs = endTs - this.config.lookbackDays * 86400;
@@ -129,9 +129,9 @@ export class BacktestFetcher {
 
       return response.data.history || [];
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 429) {
+      if (axios.isAxiosError(error) && error.response?.status === 429 && retryCount < 1) {
         await this.sleep(5000);
-        return this.fetchTokenPriceHistory(tokenId); // Retry once
+        return this.fetchTokenPriceHistory(tokenId, retryCount + 1);
       }
       return [];
     }
