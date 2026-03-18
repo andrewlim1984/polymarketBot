@@ -14,6 +14,8 @@ import path from "path";
 import { Logger } from "./logger";
 import { WhaleBacktestConfig, WhaleBacktestResults, WhaleBacktestStats } from "./whale-types";
 import { WhaleBacktestEngine } from "./whale-backtest-engine";
+import { WhaleProfiler } from "./whale-profiler";
+import { WhaleProfileAnalysis } from "./whale-types";
 import fs from "fs";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
@@ -33,7 +35,7 @@ function loadConfig(): WhaleBacktestConfig {
   };
 }
 
-function printReport(results: WhaleBacktestResults): void {
+function printReport(results: WhaleBacktestResults, whaleProfiles?: WhaleProfileAnalysis[] | null): void {
   const { stats, config, trades } = results;
 
   console.log("\n" +
@@ -150,6 +152,12 @@ function printReport(results: WhaleBacktestResults): void {
     console.log();
   }
 
+  // Whale Profiles
+  if (whaleProfiles && whaleProfiles.length > 0) {
+    const profiler = new WhaleProfiler(new Logger());
+    profiler.printSummary(whaleProfiles);
+  }
+
   // Equity Curve (ASCII)
   if (trades.length > 1) {
     printEquityCurve(trades, config.startingCapital);
@@ -214,7 +222,28 @@ async function main(): Promise<void> {
   const engine = new WhaleBacktestEngine(config, logger);
   const results = await engine.run();
 
-  printReport(results);
+  // Profile whales if we have trade data
+  let whaleProfiles: WhaleProfileAnalysis[] | null = null;
+  if (results.whalesTracked > 0) {
+    logger.info("Step 5: Profiling whale wallets...");
+    const profiler = new WhaleProfiler(logger, parseInt(process.env.WHALE_PROFILE_MIN_TRADES || "5", 10));
+    whaleProfiles = await profiler.profileAll(
+      // Build WhaleProfile objects from the backtest wallet addresses
+      Array.from(new Set(results.trades.map((t) => t.whaleWallet))).map((wallet) => ({
+        proxyWallet: wallet,
+        userName: wallet.slice(0, 10) + "...",
+        pnl: 0,
+        volume: 0,
+        rank: 0,
+        category: "OVERALL",
+        timePeriod: "MONTH",
+        lastUpdated: Date.now(),
+        isActive: true,
+      }))
+    );
+  }
+
+  printReport(results, whaleProfiles);
 
   // Export to JSON
   const exportPath = path.resolve(process.cwd(), "whale-backtest-results.json");
@@ -225,6 +254,7 @@ async function main(): Promise<void> {
       whaleTimestampIso: new Date(t.whaleTimestamp * 1000).toISOString(),
       copyTimestampIso: new Date(t.copyTimestamp * 1000).toISOString(),
     })),
+    whaleProfiles: whaleProfiles || [],
   };
   fs.writeFileSync(exportPath, JSON.stringify(exportData, null, 2));
   logger.success(`Results exported to ${exportPath}`);

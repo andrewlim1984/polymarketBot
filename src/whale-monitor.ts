@@ -4,7 +4,7 @@
  */
 import axios from "axios";
 import { Logger } from "./logger";
-import { WhaleConfig, WhaleProfile, WhaleTrade, CopySignal } from "./whale-types";
+import { WhaleConfig, WhaleProfile, WhaleTrade, CopySignal, WhaleProfileAnalysis } from "./whale-types";
 
 const DATA_API_URL = "https://data-api.polymarket.com";
 
@@ -16,6 +16,8 @@ export class WhaleMonitor {
   /** Callbacks for copy signals */
   private signalHandlers: Array<(signal: CopySignal) => void> = [];
   private pollTimer: NodeJS.Timeout | null = null;
+  /** Whale profile analyses (for conviction-weighted confidence) */
+  private whaleAnalyses: Map<string, WhaleProfileAnalysis> = new Map();
 
   constructor(config: WhaleConfig, logger: Logger) {
     this.config = config;
@@ -87,7 +89,7 @@ export class WhaleMonitor {
       // Skip trades that are too old to copy
       if (tradeAgeMs > this.config.maxCopyDelayMs) continue;
 
-      // Calculate confidence based on whale's rank and PnL
+      // Calculate confidence based on whale's rank, PnL, and profiler conviction
       const confidence = this.calculateConfidence(whale);
 
       if (confidence < this.config.minConfidence) continue;
@@ -199,8 +201,18 @@ export class WhaleMonitor {
   }
 
   /**
+   * Set whale profile analyses for conviction-weighted confidence.
+   */
+  setWhaleAnalyses(analyses: WhaleProfileAnalysis[]): void {
+    this.whaleAnalyses.clear();
+    for (const a of analyses) {
+      this.whaleAnalyses.set(a.proxyWallet.toLowerCase(), a);
+    }
+  }
+
+  /**
    * Calculate confidence score for a whale (0-1).
-   * Based on rank, PnL, and volume.
+   * Combines rank/PnL signals with profiler conviction score.
    */
   private calculateConfidence(whale: WhaleProfile): number {
     // Rank-based score (top 10 = high confidence)
@@ -209,8 +221,17 @@ export class WhaleMonitor {
     // PnL-based score (higher PnL = higher confidence)
     const pnlScore = Math.min(1, whale.pnl / 100000); // Cap at $100K
 
-    // Weighted average
-    return rankScore * 0.6 + pnlScore * 0.4;
+    // Base confidence from rank + PnL
+    const baseConfidence = rankScore * 0.6 + pnlScore * 0.4;
+
+    // If we have a profiler analysis, blend in the conviction score
+    const analysis = this.whaleAnalyses.get(whale.proxyWallet.toLowerCase());
+    if (analysis && analysis.convictionScore > 0) {
+      // 60% base confidence, 40% profiler conviction
+      return baseConfidence * 0.6 + analysis.convictionScore * 0.4;
+    }
+
+    return baseConfidence;
   }
 }
 

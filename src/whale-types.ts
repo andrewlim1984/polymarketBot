@@ -147,6 +147,83 @@ export interface WhaleConfig {
   usdcAddress: string;
 }
 
+/** Trader classification type */
+export type TraderType =
+  | "INSIDER"
+  | "QUANT"
+  | "MARKET_MAKER"
+  | "DEGENERATE"
+  | "WALLET_FOLLOWER"
+  | "UNKNOWN";
+
+/** Per-category performance stats */
+export interface CategoryStats {
+  /** Category name (e.g., "sports", "politics", "crypto") */
+  category: string;
+  /** Total trades in this category */
+  trades: number;
+  /** Winning trades */
+  wins: number;
+  /** Win rate (0-1) */
+  winRate: number;
+  /** Net PnL in this category */
+  pnl: number;
+  /** Weighted win rate (low-probability wins weighted higher) */
+  weightedWinRate: number;
+}
+
+/** Full profiler analysis for a whale wallet */
+export interface WhaleProfileAnalysis {
+  /** Wallet address */
+  proxyWallet: string;
+  /** Display name */
+  userName: string;
+  /** Wallet age in days (since first trade) */
+  walletAgeDays: number;
+  /** First trade timestamp (unix seconds) */
+  firstTradeTimestamp: number;
+  /** Total trades analyzed */
+  totalTrades: number;
+  /** Total BUY trades */
+  buyTrades: number;
+  /** Total SELL trades */
+  sellTrades: number;
+  /** Raw win rate (0-1) */
+  rawWinRate: number;
+  /**
+   * Weighted win rate: wins on low-probability bets count more.
+   * A win at 5% probability is weighted ~20x more than a win at 99%.
+   * Weight = 1 / entryPrice for wins, so lower entry prices (longer odds) = higher weight.
+   */
+  weightedWinRate: number;
+  /** Average trade size in USDC */
+  avgTradeSize: number;
+  /** Standard deviation of trade sizes */
+  tradeSizeStdDev: number;
+  /** Maximum single trade size */
+  maxTradeSize: number;
+  /** Bet sizing consistency (0-1, higher = more consistent) */
+  sizingConsistency: number;
+  /** Trades per day */
+  tradesPerDay: number;
+  /** Per-category breakdown */
+  categoryStats: CategoryStats[];
+  /** Number of distinct categories traded */
+  categoryCount: number;
+  /** Herfindahl index of category concentration (0-1, higher = more concentrated) */
+  categoryConcentration: number;
+  /** Primary (most-traded) category */
+  primaryCategory: string;
+  /** Classified trader type */
+  traderType: TraderType;
+  /** Confidence in the classification (0-1) */
+  classificationConfidence: number;
+  /** Conviction score for copy-trading (0-1, higher = more worth following) */
+  convictionScore: number;
+  /** Human-readable explanation of classification */
+  explanation: string;
+}
+
 /** Whale backtest configuration */
 export interface WhaleBacktestConfig {
   /** Starting capital in USDC */

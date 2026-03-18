@@ -17,6 +17,8 @@
  *   WHALE_CLUSTER_ENABLED  - Enable wallet switch detection (default: false)
  *   WHALE_CLUSTER_THRESHOLD - Similarity threshold for behavioral matching (default: 0.7)
  *   WHALE_AUTO_TRADE       - Enable auto copy-trading (default: false)
+ *   WHALE_PROFILE          - Enable whale profiling (default: true, set "false" to disable)
+ *   WHALE_PROFILE_MIN_TRADES - Min trades for classification (default: 10)
  *   PRIVATE_KEY            - Wallet private key (required for trading)
  *   WALLET_ADDRESS         - Proxy wallet address
  *   SIGNATURE_TYPE         - Signature type (default: 2)
@@ -30,6 +32,7 @@ import { WhaleTracker } from "./whale-tracker";
 import { WhaleMonitor } from "./whale-monitor";
 import { WalletClusterDetector } from "./wallet-cluster";
 import { WhaleCopyEngine } from "./whale-copy-engine";
+import { WhaleProfiler } from "./whale-profiler";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
@@ -83,8 +86,31 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Phase 1.5: Profile whales (classify trader types)
+  const enableProfiling = process.env.WHALE_PROFILE !== "false";
+  let profilerResults: import("./whale-types").WhaleProfileAnalysis[] = [];
+  if (enableProfiling) {
+    logger.info("Profiling whale wallets (this may take a moment)...");
+    const profiler = new WhaleProfiler(logger, parseInt(process.env.WHALE_PROFILE_MIN_TRADES || "10", 10));
+    profilerResults = await profiler.profileAll(whales);
+    profiler.printSummary(profilerResults);
+
+    // Print detailed profiles for top whales
+    const topProfiles = [...profilerResults]
+      .sort((a, b) => b.convictionScore - a.convictionScore)
+      .slice(0, 5);
+    console.log("--- Top 5 Whales by Conviction ---");
+    for (const p of topProfiles) {
+      profiler.printProfile(p);
+      console.log();
+    }
+  }
+
   // Phase 2: Initialize monitor
   const monitor = new WhaleMonitor(config, logger);
+  if (profilerResults.length > 0) {
+    monitor.setWhaleAnalyses(profilerResults);
+  }
   await monitor.initializeTimestamps(whales);
 
   // Phase 3: Initialize copy engine (if trading enabled)
