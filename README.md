@@ -26,6 +26,8 @@ When the combined price is **less than $1.00**, you can buy both sides and guara
 - **Scan-Only Mode**: Run without a wallet to just monitor opportunities
 - **Backtesting Engine**: Simulate the strategy on historical data with full statistics (PnL, Sharpe, max drawdown, equity curve)
 - **Telonex Integration**: Use tick-level bid/ask quotes from [Telonex.io](https://telonex.io) for high-fidelity backtesting
+- **Whale Copy-Trading**: Identify and follow the most profitable Polymarket wallets in real-time
+- **Wallet Switch Detection**: Behavioral fingerprinting and fund flow tracking to detect when whales switch wallets
 
 ## Quick Start
 
@@ -104,7 +106,54 @@ The backtest outputs:
 - ASCII equity curve
 - JSON export to `backtest-results.json`
 
-#### Full Bot Mode
+#### Whale Copy-Trading Mode (No wallet needed for monitoring)
+
+Monitor the most profitable Polymarket wallets and copy their trades:
+
+```bash
+# Monitor-only mode (no trading, just signals)
+npm run whale
+
+# With auto-trading enabled
+WHALE_AUTO_TRADE=true npm run whale
+```
+
+Customize whale tracking parameters:
+
+```bash
+WHALE_TOP_WALLETS=50 WHALE_MIN_PNL=5000 WHALE_LEADERBOARD_PERIOD=MONTH npm run whale
+```
+
+#### Whale Copy-Trading Backtest
+
+Simulate the whale copy-trading strategy on historical data:
+
+```bash
+npm run whale:backtest
+
+# Custom parameters
+WHALE_BT_TOP_WALLETS=50 WHALE_BT_LOOKBACK_DAYS=30 WHALE_BT_COPY_DELAY_MS=2000 npm run whale:backtest
+```
+
+The whale backtest outputs:
+- Per-whale PnL breakdown (best/worst whale to copy)
+- Resolved vs pending market breakdown
+- Risk metrics (Sharpe, Sortino, max drawdown, profit factor)
+- Top 10 most profitable copy trades
+- ASCII equity curve
+- JSON export to `whale-backtest-results.json`
+
+#### How Wallet Switch Detection Works
+
+Profitable traders often switch to new wallets to avoid being tracked. The system detects this two ways:
+
+1. **Fund Flow Tracking**: Monitors USDC transfers on Polygon from known whale addresses to new addresses. If a tracked whale sends significant USDC to a new wallet, that wallet is automatically added to monitoring.
+
+2. **Behavioral Fingerprinting**: Builds a profile for each whale based on trade size, frequency, timing patterns, market categories, and buy/sell ratio. When a whale goes inactive and a new wallet appears with a similar fingerprint, it's flagged as the same trader.
+
+Enable with `WHALE_CLUSTER_ENABLED=true`. Adjust sensitivity with `WHALE_CLUSTER_THRESHOLD` (0-1, higher = stricter matching).
+
+#### Full Bot Mode (Arbitrage)
 
 Start the continuous scanner with optional auto-trading:
 
@@ -146,6 +195,17 @@ npm start
 | `BACKTEST_INTERVAL` | `1h` | Price history interval (1h/6h/1d/1w/max) |
 | `BACKTEST_FIDELITY` | `500` | Number of data points per token (clob source only) |
 | `BACKTEST_MAX_EVENTS` | `200` | Max events to backtest (0 = all) |
+| `WHALE_TOP_WALLETS` | `25` | Number of top wallets to track |
+| `WHALE_LEADERBOARD_PERIOD` | `WEEK` | Leaderboard period: DAY/WEEK/MONTH/ALL |
+| `WHALE_LEADERBOARD_CATEGORY` | `OVERALL` | Leaderboard category |
+| `WHALE_POLL_MS` | `15000` | Trade polling interval (ms) |
+| `WHALE_MIN_PNL` | `1000` | Minimum whale PnL to track (USDC) |
+| `WHALE_COPY_FRACTION` | `0.1` | Fraction of whale's trade to copy |
+| `WHALE_MAX_COPY_SIZE` | `50` | Max USDC per copy trade |
+| `WHALE_MIN_CONFIDENCE` | `0.3` | Min confidence score to copy (0-1) |
+| `WHALE_CLUSTER_ENABLED` | `false` | Enable wallet switch detection |
+| `WHALE_CLUSTER_THRESHOLD` | `0.7` | Behavioral similarity threshold (0-1) |
+| `WHALE_AUTO_TRADE` | `false` | Enable auto copy-trading |
 
 ## Architecture
 
@@ -153,12 +213,20 @@ npm start
 src/
 ├── index.ts              # Main entry point - orchestrates all modules
 ├── scan-only.ts          # Standalone single-scan mode
-├── backtest.ts           # Backtest CLI entry point
+├── backtest.ts           # Arbitrage backtest CLI entry point
 ├── backtest-types.ts     # Backtest type definitions
 ├── backtest-fetcher.ts   # Historical price data fetcher (Polymarket CLOB)
 ├── telonex-fetcher.ts    # Historical price data fetcher (Telonex tick-level quotes)
 ├── backtest-engine.ts    # Backtest simulation engine
 ├── backtest-report.ts    # Statistics & report printer
+├── whale-scanner.ts      # Whale copy-trading CLI entry point
+├── whale-backtest.ts     # Whale backtest CLI entry point
+├── whale-backtest-engine.ts # Whale backtest simulation engine
+├── whale-tracker.ts      # Leaderboard discovery & wallet ranking
+├── whale-monitor.ts      # Real-time whale trade polling
+├── whale-copy-engine.ts  # Copy trade execution engine
+├── wallet-cluster.ts     # Wallet switch detection (fund flows + fingerprinting)
+├── whale-types.ts        # Whale strategy type definitions
 ├── config.ts             # Configuration loader (.env)
 ├── types.ts              # TypeScript interfaces
 ├── scanner.ts            # Market scanner (Gamma API)
@@ -176,6 +244,7 @@ src/
 | CLOB API | `https://clob.polymarket.com` | Yes (for trading) |
 | WebSocket | `wss://ws-subscriptions-clob.polymarket.com/ws/` | No |
 | Telonex API | `https://api.telonex.io/v1` | Yes (API key for downloads) |
+| Data API | `https://data-api.polymarket.com` | No (leaderboard + trades) |
 
 ## Risk Disclaimer
 
