@@ -220,16 +220,22 @@ async function main(): Promise<void> {
     `$${config.startingCapital} capital, ${config.copyDelayMs}ms copy delay`);
 
   const engine = new WhaleBacktestEngine(config, logger);
-  const results = await engine.run();
 
-  // Profile whales if we have trade data
+  // Step 1: Discover whales from leaderboard
+  logger.info("Step 1: Discovering top whale wallets...");
+  const allWallets = await engine.fetchTopWhales();
+  logger.info(`Found ${allWallets.length} whale wallets.`);
+
+  // Step 2: Profile whales to classify trader types
+  const enableProfiling = process.env.WHALE_PROFILE !== "false";
   let whaleProfiles: WhaleProfileAnalysis[] | null = null;
-  if (results.whalesTracked > 0) {
-    logger.info("Step 5: Profiling whale wallets...");
+  let filteredWallets = allWallets;
+
+  if (enableProfiling && allWallets.length > 0) {
+    logger.info("Step 2: Profiling whale wallets (to filter DEGENERATEs)...");
     const profiler = new WhaleProfiler(logger, parseInt(process.env.WHALE_PROFILE_MIN_TRADES || "5", 10));
     whaleProfiles = await profiler.profileAll(
-      // Build WhaleProfile objects from the backtest wallet addresses
-      Array.from(new Set(results.trades.map((t) => t.whaleWallet))).map((wallet) => ({
+      allWallets.map((wallet) => ({
         proxyWallet: wallet,
         userName: wallet.slice(0, 10) + "...",
         pnl: 0,
@@ -241,7 +247,32 @@ async function main(): Promise<void> {
         isActive: true,
       }))
     );
+
+    // Filter out DEGENERATE profiles — no edge to copy
+    const degenerateWallets = new Set(
+      whaleProfiles
+        .filter((p) => p.traderType === "DEGENERATE")
+        .map((p) => p.proxyWallet.toLowerCase())
+    );
+
+    if (degenerateWallets.size > 0) {
+      filteredWallets = allWallets.filter(
+        (w) => !degenerateWallets.has(w.toLowerCase())
+      );
+      logger.info(
+        `Excluded ${degenerateWallets.size} DEGENERATE wallet(s). ` +
+        `Backtesting ${filteredWallets.length} whale(s) with edge.`
+      );
+    }
   }
+
+  if (filteredWallets.length === 0) {
+    logger.error("All discovered whales are DEGENERATE. No wallets to backtest.");
+    process.exit(1);
+  }
+
+  // Step 3-4: Run backtest simulation with filtered wallets
+  const results = await engine.run(filteredWallets);
 
   printReport(results, whaleProfiles);
 

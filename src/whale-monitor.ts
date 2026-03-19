@@ -78,6 +78,12 @@ export class WhaleMonitor {
       this.lastSeenTimestamp.set(whale.proxyWallet, maxTs);
     }
 
+    // Skip DEGENERATE profiles — no edge to copy
+    const analysis = this.whaleAnalyses.get(whale.proxyWallet.toLowerCase());
+    if (analysis && analysis.traderType === "DEGENERATE") {
+      return [];
+    }
+
     // Only generate signals for BUY trades (we follow their entries)
     const buyTrades = newTrades.filter((t) => t.side === "BUY");
     const signals: CopySignal[] = [];

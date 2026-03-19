@@ -106,12 +106,36 @@ async function main(): Promise<void> {
     }
   }
 
+  // Phase 1.6: Filter out DEGENERATE profiles — no edge to copy
+  let monitoredWhales = whales;
+  if (profilerResults.length > 0) {
+    const degenerateWallets = new Set(
+      profilerResults
+        .filter((p) => p.traderType === "DEGENERATE")
+        .map((p) => p.proxyWallet.toLowerCase())
+    );
+    if (degenerateWallets.size > 0) {
+      monitoredWhales = whales.filter(
+        (w) => !degenerateWallets.has(w.proxyWallet.toLowerCase())
+      );
+      logger.info(
+        `Excluded ${degenerateWallets.size} DEGENERATE wallet(s) from monitoring. ` +
+        `Tracking ${monitoredWhales.length} whale(s) with edge.`
+      );
+    }
+  }
+
+  if (monitoredWhales.length === 0) {
+    logger.error("All discovered whales are DEGENERATE. No wallets to monitor.");
+    process.exit(1);
+  }
+
   // Phase 2: Initialize monitor
   const monitor = new WhaleMonitor(config, logger);
   if (profilerResults.length > 0) {
     monitor.setWhaleAnalyses(profilerResults);
   }
-  await monitor.initializeTimestamps(whales);
+  await monitor.initializeTimestamps(monitoredWhales);
 
   // Phase 3: Initialize copy engine (if trading enabled)
   const copyEngine = new WhaleCopyEngine(config, logger);
@@ -144,7 +168,17 @@ async function main(): Promise<void> {
   );
 
   tracker.startRefreshLoop();
-  monitor.startPolling(() => tracker.getTrackedWhales());
+  // Filter out DEGENERATE wallets from the polling loop too
+  const degenerateWalletsSet = new Set(
+    profilerResults
+      .filter((p) => p.traderType === "DEGENERATE")
+      .map((p) => p.proxyWallet.toLowerCase())
+  );
+  monitor.startPolling(() =>
+    tracker.getTrackedWhales().filter(
+      (w) => !degenerateWalletsSet.has(w.proxyWallet.toLowerCase())
+    )
+  );
 
   // Periodic cluster detection
   if (clusterDetector) {

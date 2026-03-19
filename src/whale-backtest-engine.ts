@@ -45,11 +45,19 @@ export class WhaleBacktestEngine {
 
   /**
    * Run the full whale copy-trading backtest.
+   * @param filteredWallets Optional pre-filtered wallet list (e.g. with DEGENERATEs removed).
+   *                        If provided, skips leaderboard discovery and uses these wallets directly.
    */
-  async run(): Promise<WhaleBacktestResults> {
-    // Step 1: Discover top whales from leaderboard
-    this.logger.info("Step 1: Discovering top whale wallets...");
-    const whaleWallets = await this.fetchTopWhales();
+  async run(filteredWallets?: string[]): Promise<WhaleBacktestResults> {
+    // Step 1: Discover top whales from leaderboard (or use pre-filtered list)
+    let whaleWallets: string[];
+    if (filteredWallets && filteredWallets.length > 0) {
+      whaleWallets = filteredWallets;
+      this.logger.info(`Using ${whaleWallets.length} pre-filtered whale wallets.`);
+    } else {
+      this.logger.info("Step 1: Discovering top whale wallets...");
+      whaleWallets = await this.fetchTopWhales();
+    }
     this.logger.info(`Found ${whaleWallets.length} whale wallets to backtest.`);
 
     if (whaleWallets.length === 0) {
@@ -94,7 +102,7 @@ export class WhaleBacktestEngine {
   /**
    * Fetch top wallets from the leaderboard.
    */
-  private async fetchTopWhales(): Promise<string[]> {
+  async fetchTopWhales(): Promise<string[]> {
     const wallets: string[] = [];
     let offset = 0;
     const limit = 50;
