@@ -131,7 +131,7 @@ export class MarketScanner {
     const noPrice = market.outcomePrices[1];
 
     // Skip markets with zero prices (no liquidity)
-    if (yesPrice === 0 && noPrice === 0) {
+    if (yesPrice === 0 || noPrice === 0) {
       return null;
     }
 
