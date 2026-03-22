@@ -426,7 +426,7 @@ export class WhaleProfiler {
     if (/trump|biden|election|congress|senate|democrat|republican|politic|vote|president|governor/.test(text)) {
       return "politics";
     }
-    if (/nfl|nba|mlb|nhl|soccer|football|baseball|basketball|tennis|ufc|mma|win on 20|match|game|league|championship/.test(text)) {
+    if (/nfl|nba|mlb|nhl|ncaa|soccer|football|baseball|basketball|tennis|ufc|mma|win on 20|match|game\b|league|championship|playoffs|bowl\b|series\b|vs\.|falcons|eagles|warriors|cavaliers|lakers|celtics|patriots|cowboys|yankees|dodgers|red sox|wolfpack|crusaders|terriers|minutemen|cardinals|hawks|hornets|panthers|tigers|bears|lions|bulls|colts|rams|ravens|steelers|chiefs|packers|broncos|49ers|saints|buccaneers|chargers|bengals|jaguars|titans|texans|raiders|seahawks|commanders|giants|jets|dolphins|bills|clippers|nets|knicks|heat|spurs|suns|nuggets|grizzlies|pelicans|blazers|rockets|mavericks|timberwolves|thunder|magic|pistons|raptors|wizards|royals|astros|braves|brewers|cubs|diamondbacks|guardians|mariners|marlins|mets|nationals|orioles|padres|phillies|pirates|reds|rockies|twins|white sox|athletics|blue jays|rays/.test(text)) {
       return "sports";
     }
     if (/bitcoin|ethereum|btc|eth|crypto|token|defi|solana|sol|blockchain/.test(text)) {
