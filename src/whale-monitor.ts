@@ -5,6 +5,7 @@
 import axios from "axios";
 import { Logger } from "./logger";
 import { WhaleConfig, WhaleProfile, WhaleTrade, CopySignal, WhaleProfileAnalysis } from "./whale-types";
+import { WhaleProfiler } from "./whale-profiler";
 
 const DATA_API_URL = "https://data-api.polymarket.com";
 
@@ -18,10 +19,13 @@ export class WhaleMonitor {
   private pollTimer: NodeJS.Timeout | null = null;
   /** Whale profile analyses (for conviction-weighted confidence) */
   private whaleAnalyses: Map<string, WhaleProfileAnalysis> = new Map();
+  /** Profiler instance for category inference */
+  private profiler: WhaleProfiler;
 
   constructor(config: WhaleConfig, logger: Logger) {
     this.config = config;
     this.logger = logger;
+    this.profiler = new WhaleProfiler(logger);
   }
 
   /**
@@ -85,7 +89,15 @@ export class WhaleMonitor {
     }
 
     // Only generate signals for BUY trades (we follow their entries)
-    const buyTrades = newTrades.filter((t) => t.side === "BUY");
+    // Also filter out excluded categories (e.g. sports)
+    const buyTrades = newTrades.filter((t) => {
+      if (t.side !== "BUY") return false;
+      if (this.config.excludeCategories.length > 0) {
+        const category = this.profiler.inferCategory(t);
+        if (this.config.excludeCategories.includes(category)) return false;
+      }
+      return true;
+    });
     const signals: CopySignal[] = [];
 
     for (const trade of buyTrades) {

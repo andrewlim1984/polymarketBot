@@ -145,6 +145,8 @@ export interface WhaleConfig {
   rpcUrl: string;
   /** USDC token address on Polygon */
   usdcAddress: string;
+  /** Categories to exclude from copy trading (e.g. ["sports"]) */
+  excludeCategories: string[];
 }
 
 /** Trader classification type */
@@ -246,6 +248,8 @@ export interface WhaleBacktestConfig {
   maxExposureUsdc: number;
   /** Daily loss limit USDC */
   dailyLossLimitUsdc: number;
+  /** Categories to exclude from copy trading (e.g. ["sports"]) */
+  excludeCategories: string[];
 }
 
 /** Whale backtest trade result */
@@ -312,4 +316,5 @@ export interface WhaleBacktestStats {
   tradesSkippedExposure: number;
   tradesSkippedDailyLoss: number;
   tradesSkippedCapital: number;
+  tradesSkippedCategory: number;
 }

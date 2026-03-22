@@ -16,6 +16,7 @@ import {
   WhaleBacktestStats,
   WhaleTrade,
 } from "./whale-types";
+import { WhaleProfiler } from "./whale-profiler";
 
 const DATA_API_URL = "https://data-api.polymarket.com";
 const GAMMA_API_URL = "https://gamma-api.polymarket.com";
@@ -37,10 +38,13 @@ export class WhaleBacktestEngine {
   private marketCache: Map<string, MarketResolution> = new Map();
   /** Cache price history for markets */
   private priceCache: Map<string, Array<{ t: number; p: number }>> = new Map();
+  /** Profiler instance for category inference */
+  private profiler: WhaleProfiler;
 
   constructor(config: WhaleBacktestConfig, logger: Logger) {
     this.config = config;
     this.logger = logger;
+    this.profiler = new WhaleProfiler(logger);
   }
 
   /**
@@ -214,6 +218,7 @@ export class WhaleBacktestEngine {
     let skippedExposure = 0;
     let skippedDailyLoss = 0;
     let skippedCapital = 0;
+    let skippedCategory = 0;
 
     // Collect all trades across whales and sort by timestamp
     const allTrades: Array<{ wallet: string; trade: WhaleTrade }> = [];
@@ -243,6 +248,15 @@ export class WhaleBacktestEngine {
       );
 
       if (copySize < 1) continue;
+
+      // Category exclusion check
+      if (this.config.excludeCategories.length > 0) {
+        const tradeCategory = this.profiler.inferCategory(trade);
+        if (this.config.excludeCategories.includes(tradeCategory)) {
+          skippedCategory++;
+          continue;
+        }
+      }
 
       // Capital depletion check
       if (capital < copySize) {
@@ -328,6 +342,7 @@ export class WhaleBacktestEngine {
     (this as unknown as Record<string, number>)._skippedExposure = skippedExposure;
     (this as unknown as Record<string, number>)._skippedDailyLoss = skippedDailyLoss;
     (this as unknown as Record<string, number>)._skippedCapital = skippedCapital;
+    (this as unknown as Record<string, number>)._skippedCategory = skippedCategory;
 
     return backtestTrades;
   }
@@ -506,6 +521,7 @@ export class WhaleBacktestEngine {
     const skippedExposure = (this as unknown as Record<string, number>)._skippedExposure || 0;
     const skippedDailyLoss = (this as unknown as Record<string, number>)._skippedDailyLoss || 0;
     const skippedCapital = (this as unknown as Record<string, number>)._skippedCapital || 0;
+    const skippedCategory = (this as unknown as Record<string, number>)._skippedCategory || 0;
 
     return {
       totalTrades,
@@ -530,6 +546,7 @@ export class WhaleBacktestEngine {
       tradesSkippedExposure: skippedExposure,
       tradesSkippedDailyLoss: skippedDailyLoss,
       tradesSkippedCapital: skippedCapital,
+      tradesSkippedCategory: skippedCategory,
     };
   }
 
@@ -570,7 +587,7 @@ export class WhaleBacktestEngine {
         sharpeRatio: 0, sortinoRatio: 0, profitFactor: 0,
         bestWhale: { wallet: "N/A", pnl: 0, trades: 0 },
         worstWhale: { wallet: "N/A", pnl: 0, trades: 0 },
-        tradesSkippedExposure: 0, tradesSkippedDailyLoss: 0, tradesSkippedCapital: 0,
+        tradesSkippedExposure: 0, tradesSkippedDailyLoss: 0, tradesSkippedCapital: 0, tradesSkippedCategory: 0,
       },
     };
   }

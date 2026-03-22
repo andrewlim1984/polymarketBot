@@ -63,6 +63,10 @@ async function main(): Promise<void> {
     autoTradeEnabled: process.env.WHALE_AUTO_TRADE === "true",
     rpcUrl: process.env.RPC_URL || "https://polygon-rpc.com",
     usdcAddress: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+    excludeCategories: (process.env.WHALE_EXCLUDE_CATEGORIES || "sports")
+      .split(",")
+      .map((c) => c.trim().toLowerCase())
+      .filter((c) => c.length > 0),
   };
 
   logger.info(`Config: ${JSON.stringify({
@@ -75,6 +79,7 @@ async function main(): Promise<void> {
     maxCopySize: `$${config.maxCopySizeUsdc}`,
     autoTrade: config.autoTradeEnabled,
     clusterDetection: config.clusterDetectionEnabled,
+    excludeCategories: config.excludeCategories,
   })}`);
 
   // Phase 1: Discover whales

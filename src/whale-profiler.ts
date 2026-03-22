@@ -418,7 +418,7 @@ export class WhaleProfiler {
    * Infer category from event slug or title.
    * Uses common Polymarket category keywords.
    */
-  private inferCategory(trade: WhaleTrade): string {
+  inferCategory(trade: WhaleTrade): string {
     const slug = (trade.eventSlug || trade.slug || "").toLowerCase();
     const title = trade.title.toLowerCase();
     const text = `${slug} ${title}`;

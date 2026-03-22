@@ -32,6 +32,10 @@ function loadConfig(): WhaleBacktestConfig {
     lookbackDays: parseInt(process.env.WHALE_BT_LOOKBACK_DAYS || process.env.BACKTEST_LOOKBACK_DAYS || "14", 10),
     maxExposureUsdc: parseFloat(process.env.WHALE_BT_MAX_EXPOSURE || process.env.BACKTEST_MAX_EXPOSURE || "500"),
     dailyLossLimitUsdc: parseFloat(process.env.WHALE_BT_DAILY_LOSS || process.env.BACKTEST_DAILY_LOSS || "100"),
+    excludeCategories: (process.env.WHALE_EXCLUDE_CATEGORIES || "sports")
+      .split(",")
+      .map((c) => c.trim().toLowerCase())
+      .filter((c) => c.length > 0),
   };
 }
 
@@ -56,6 +60,7 @@ function printReport(results: WhaleBacktestResults, whaleProfiles?: WhaleProfile
   console.log(`  Lookback                  ${config.lookbackDays} days`);
   console.log(`  Max Exposure              $${config.maxExposureUsdc > 0 ? config.maxExposureUsdc.toLocaleString() : "none"}`);
   console.log(`  Daily Loss Limit          $${config.dailyLossLimitUsdc > 0 ? config.dailyLossLimitUsdc.toLocaleString() : "none"}`);
+  console.log(`  Excluded Categories       ${config.excludeCategories.length > 0 ? config.excludeCategories.join(", ") : "none"}`);
   console.log();
 
   // Overview
@@ -110,7 +115,7 @@ function printReport(results: WhaleBacktestResults, whaleProfiles?: WhaleProfile
   console.log();
 
   // Risk Constraints
-  const totalSkipped = stats.tradesSkippedExposure + stats.tradesSkippedDailyLoss + stats.tradesSkippedCapital;
+  const totalSkipped = stats.tradesSkippedExposure + stats.tradesSkippedDailyLoss + stats.tradesSkippedCapital + stats.tradesSkippedCategory;
   if (totalSkipped > 0) {
     console.log("--- Risk Constraints ---");
     console.log(`  Total Trades Skipped      ${totalSkipped}`);
@@ -122,6 +127,9 @@ function printReport(results: WhaleBacktestResults, whaleProfiles?: WhaleProfile
     }
     if (stats.tradesSkippedCapital > 0) {
       console.log(`  Skipped (Capital)         ${stats.tradesSkippedCapital}`);
+    }
+    if (stats.tradesSkippedCategory > 0) {
+      console.log(`  Skipped (Category)        ${stats.tradesSkippedCategory}`);
     }
     console.log();
   }
